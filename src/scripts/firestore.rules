@@ -1,0 +1,138 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return request.auth.uid == userId;
+    }
+    
+    function hasRole(role) {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == role;
+    }
+    
+    function isVendor() {
+      return hasRole('vendor');
+    }
+    
+    function isCustomer() {
+      return hasRole('customer');
+    }
+    
+    function isShopOwner(shopId) {
+      return isVendor() && 
+             get(/databases/$(database)/documents/shops/$(shopId)).data.ownerId == request.auth.uid;
+    }
+    
+    // Rules for users collection
+    match /users/{userId} {
+      // Users can read and update their own data
+      allow get, update: if isOwner(userId);
+      // Only authenticated users can read basic user info
+      allow read: if isSignedIn();
+      // Allow creation if the auth ID matches the document ID (for initialization)
+      allow create: if isOwner(userId);
+    }
+    
+    // Rules for shops collection
+    match /shops/{shopId} {
+      // Anyone can read shop data - even if not signed in
+      allow read: if true;
+      // Allow vendors to create their own shops
+      allow create: if isSignedIn() && isVendor() && request.resource.data.ownerId == request.auth.uid;
+      // Allow shops to be updated by their owners or for ratings updates
+      allow update: if isSignedIn() && (
+        (isVendor() && resource.data.ownerId == request.auth.uid) ||
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ratingCount', 'ratingTotal', 'averageRating']))
+      );
+      allow delete: if false;  // No deletion allowed
+    }
+    
+    // Rules for menuItems collection
+    match /menuItems/{menuItemId} {
+      // Anyone can read menu items
+      allow read: if true;
+      // Only the shop owner can create/update/delete menu items
+      allow create: if isSignedIn() && isVendor() && 
+                      get(/databases/$(database)/documents/shops/$(request.resource.data.shopId)).data.ownerId == request.auth.uid;
+      allow update, delete: if isSignedIn() && isVendor() && 
+                             get(/databases/$(database)/documents/shops/$(resource.data.shopId)).data.ownerId == request.auth.uid;
+    }
+    
+    // Rules for shopRatings collection
+    match /shopRatings/{ratingId} {
+      // Anyone can read shop ratings
+      allow read: if true;
+      // Allow any authenticated users to create ratings
+      allow create: if isSignedIn();
+      // Only the rating creator can update their ratings
+      allow update: if isSignedIn() && 
+                    request.auth.uid == resource.data.userId;
+      allow delete: if false; // No deletion allowed
+    }
+    
+    // Rules for feedback collection
+    match /feedback/{feedbackId} {
+      // Anyone can read feedback
+      allow read: if true;
+      // Authenticated users can create feedback
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      // Only the feedback creator can update their feedback
+      allow update: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow delete: if false; // No deletion allowed
+    }
+    
+    // Rules for orders collection
+    match /orders/{orderId} {
+      // Customers can read their own orders, vendors can read orders for shops they own
+      allow read: if isSignedIn() && (
+        (isCustomer() && resource.data.customerId == request.auth.uid) ||
+        (isVendor() && isShopOwner(resource.data.shopId))
+      );
+      
+      // Customers can create orders
+      allow create: if isSignedIn() && 
+                     (
+                       (isCustomer() &&
+                       request.resource.data.customerId == request.auth.uid && 
+                       request.resource.data.status == "pending") ||
+                       // Allow analytics data population by creating orders with any status
+                       (request.resource.data.status == "completed" || 
+                        request.resource.data.status == "cancelled")
+                     );
+                     
+      // Customers can update their orders only if not yet accepted by vendor
+      // Vendors can only update orders for shops they own
+      // Also allow customers to add ratings to their orders
+      allow update: if isSignedIn() && (
+        (isCustomer() && 
+         resource.data.customerId == request.auth.uid && 
+         ((resource.data.status == "new" || resource.data.status == "pending") &&
+          request.resource.data.status == "cancelled" ||
+          // Allow customer to add rating to their order
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['rating', 'hasRating']))
+        ) ||
+        (isVendor() && 
+         isShopOwner(resource.data.shopId) &&
+         (
+           // Allow valid status transitions
+           (resource.data.status == "new" && 
+            (request.resource.data.status == "accepted" || request.resource.data.status == "cancelled")) ||
+           (resource.data.status == "pending" && 
+            (request.resource.data.status == "accepted" || request.resource.data.status == "cancelled")) ||
+           (resource.data.status == "accepted" && 
+            (request.resource.data.status == "preparing" || request.resource.data.status == "cancelled")) ||
+           (resource.data.status == "preparing" && 
+            (request.resource.data.status == "ready" || request.resource.data.status == "cancelled")) ||
+           (resource.data.status == "ready" && 
+            (request.resource.data.status == "completed" || request.resource.data.status == "cancelled"))
+         )
+        )
+      );
+    }
+  }
+} 

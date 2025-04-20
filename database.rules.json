@@ -1,0 +1,31 @@
+{
+  "rules": {
+    ".read": "auth != null",
+    ".write": "auth != null",
+    
+    "shopOrders": {
+      ".read": "auth != null",
+      ".write": "auth != null",
+      
+      "$shopId": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    },
+    
+    "customerOrders": {
+      ".read": "auth != null",
+      ".write": "auth != null",
+      
+      "$customerId": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    },
+    
+    "shops": {
+      ".read": true,
+      ".write": "auth != null"
+    }
+  }
+} 

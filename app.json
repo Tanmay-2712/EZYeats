@@ -1,0 +1,61 @@
+{
+  "expo": {
+    "name": "EZYeats",
+    "slug": "EZYeats",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "runtimeVersion": {
+        "policy": "appVersion"
+      },
+      "infoPlist": {
+        "NSCameraUsageDescription": "This app uses the camera to scan QR codes"
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.RECORD_AUDIO"
+      ],
+      "package": "com.tanmay2712.EZYeats",
+      "runtimeVersion": "1.0.0"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-barcode-scanner",
+      "expo-camera",
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Allow EZYeats to access your photos to save QR codes",
+          "savePhotosPermission": "Allow EZYeats to save QR codes to your gallery"
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "594fa668-ede3-41c9-823f-99b8598e388f"
+      }
+    },
+    "updates": {
+      "url": "https://u.expo.dev/594fa668-ede3-41c9-823f-99b8598e388f"
+    }
+  }
+}
