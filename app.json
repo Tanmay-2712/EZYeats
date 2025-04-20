@@ -33,7 +33,11 @@
         "android.permission.RECORD_AUDIO"
       ],
       "package": "com.tanmay2712.EZYeats",
-      "runtimeVersion": "1.0.0"
+      "runtimeVersion": "1.0.0",
+      "jsEngine": "hermes",
+      "enableProguardInReleaseBuilds": false,
+      "enableDangerousExperimentalLeanBuilds": false,
+      "softwareKeyboardLayoutMode": "pan"
     },
     "web": {
       "favicon": "./assets/favicon.png"

@@ -32,6 +32,40 @@
     "production": {
       "channel": "production",
       "resourceClass": "medium"
+    },
+    "standalone-apk": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleRelease",
+        "autoIncrement": true,
+        "withoutCredentials": true
+      },
+      "prebuildCommand": "npx expo-doctor && npx expo install --check",
+      "cache": {
+        "disabled": true
+      },
+      "env": {
+        "GRADLE_OPTS": "-Dorg.gradle.jvmargs='-Xmx4g -XX:+HeapDumpOnOutOfMemoryError'",
+        "NODE_OPTIONS": "--max-old-space-size=8192"
+      },
+      "resourceClass": "medium"
+    },
+    "debug-standalone": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleDebug",
+        "withoutCredentials": true
+      },
+      "cache": {
+        "disabled": true
+      },
+      "env": {
+        "GRADLE_OPTS": "-Dorg.gradle.daemon=false",
+        "NODE_OPTIONS": "--max-old-space-size=4096"
+      },
+      "resourceClass": "medium"
     }
   },
   "submit": {
