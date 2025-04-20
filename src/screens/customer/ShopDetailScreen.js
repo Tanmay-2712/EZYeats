@@ -1,477 +1,266 @@
-import React, { useState, useEffect, useRef } from 'react';
-import {
-  StyleSheet,
-  View,
-  Text,
-  FlatList,
-  TouchableOpacity,
-  Image,
-  ScrollView,
-  ActivityIndicator,
-  Animated,
-  Dimensions,
+import React, { useState, useEffect } from 'react';
+import { 
+  StyleSheet, 
+  View, 
+  Text, 
+  FlatList, 
+  TouchableOpacity, 
+  Image, 
+  ActivityIndicator, 
+  Alert,
+  SafeAreaView,
   StatusBar,
-  TextInput,
-  Modal,
-  Platform
+  SectionList
 } from 'react-native';
-import { MaterialIcons, Ionicons } from '@expo/vector-icons';
-import { Chip, Badge, Divider } from 'react-native-paper';
-import { collection, getDocs, doc, getDoc } from 'firebase/firestore';
-import { db } from '../../config/firebase';
+import { Card, Button, Badge, Chip, Divider, FAB } from 'react-native-paper';
+import { MaterialIcons } from '@expo/vector-icons';
+import { collection, query, where, getDocs, limit, orderBy } from 'firebase/firestore';
+import { db } from '../../firebase/config';
 import { useCart } from '../../context/CartContext';
-import { BlurView } from 'expo-blur';
-import { SharedElement } from 'react-navigation-shared-element';
-import { LinearGradient } from 'expo-linear-gradient';
-
-const { width, height } = Dimensions.get('window');
-const ITEM_HEIGHT = 110;
 
 const ShopDetailScreen = ({ route, navigation }) => {
   const { shopId, shopName, shopData } = route.params;
-  const [products, setProducts] = useState([]);
-  const [categories, setCategories] = useState([]);
+  const [menuItems, setMenuItems] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [selectedCategory, setSelectedCategory] = useState('All');
-  const [filteredProducts, setFilteredProducts] = useState([]);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [showSearch, setShowSearch] = useState(false);
-  const [showProductModal, setShowProductModal] = useState(false);
-  const [selectedProduct, setSelectedProduct] = useState(null);
-  const [quantity, setQuantity] = useState(1);
-  const [specialInstructions, setSpecialInstructions] = useState('');
-  const [expandedHours, setExpandedHours] = useState(false);
-  
-  const { addToCart, cart, getItemQuantity } = useCart();
-  
-  const scrollY = useRef(new Animated.Value(0)).current;
-  const searchInputRef = useRef(null);
-  
-  // Animation values
-  const headerHeight = scrollY.interpolate({
-    inputRange: [0, 150],
-    outputRange: [250, 60],
-    extrapolate: 'clamp',
-  });
-  
-  const headerOpacity = scrollY.interpolate({
-    inputRange: [0, 100, 150],
-    outputRange: [1, 0.5, 0],
-    extrapolate: 'clamp',
-  });
-  
-  const titleOpacity = scrollY.interpolate({
-    inputRange: [0, 50, 100],
-    outputRange: [0, 0.5, 1],
-    extrapolate: 'clamp',
-  });
+  const [categories, setCategories] = useState(['all']);
+  const [selectedCategory, setSelectedCategory] = useState('all');
+  const [filteredMenu, setFilteredMenu] = useState([]);
+  const [groupedMenu, setGroupedMenu] = useState([]);
+  const { cart, addToCart, getItemCount } = useCart();
+  const [ratings, setRatings] = useState([]);
+  const [showAllReviews, setShowAllReviews] = useState(false);
+  const [viewMode, setViewMode] = useState('grid');
 
   useEffect(() => {
-    fetchShopProducts();
-  }, []);
+    fetchMenuItems();
+    fetchShopRatings();
+  }, [shopId]);
 
-  const fetchShopProducts = async () => {
+  useEffect(() => {
+    if (selectedCategory === 'all') {
+      organizeMenuByCategory(menuItems);
+    } else {
+      const filtered = menuItems.filter(item => item.category === selectedCategory);
+      setFilteredMenu(filtered);
+      organizeMenuByCategory(filtered);
+    }
+  }, [selectedCategory, menuItems]);
+
+  const organizeMenuByCategory = (items) => {
+    const categorizedMenu = {};
+    
+    items.forEach(item => {
+      const category = item.category || 'Other';
+      if (!categorizedMenu[category]) {
+        categorizedMenu[category] = [];
+      }
+      categorizedMenu[category].push(item);
+    });
+    
+    const sections = Object.keys(categorizedMenu).map(category => ({
+      title: category,
+      data: categorizedMenu[category]
+    }));
+    
+    setGroupedMenu(sections);
+  };
+
+  const fetchMenuItems = async () => {
     try {
-      const productsCollection = collection(db, `shops/${shopId}/products`);
-      const productSnapshot = await getDocs(productsCollection);
+      const menuQuery = query(
+        collection(db, 'menuItems'),
+        where('shopId', '==', shopId),
+        where('available', '==', true)
+      );
       
-      const productsList = productSnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
+      const querySnapshot = await getDocs(menuQuery);
       
-      // Get unique categories
-      const uniqueCategories = ['All', ...new Set(productsList.map(product => product.category))];
+      const items = [];
+      const categorySet = new Set(['all']);
       
-      setProducts(productsList);
-      setFilteredProducts(productsList);
-      setCategories(uniqueCategories);
+      querySnapshot.forEach((doc) => {
+        const item = { id: doc.id, ...doc.data() };
+        items.push(item);
+        
+        if (item.category) {
+          categorySet.add(item.category);
+        }
+      });
+      
+      setMenuItems(items);
+      setFilteredMenu(items);
+      setCategories(Array.from(categorySet));
+      organizeMenuByCategory(items);
       setLoading(false);
     } catch (error) {
-      console.error('Error fetching shop products:', error);
+      console.error('Error fetching menu items:', error);
       setLoading(false);
     }
   };
 
-  const handleCategorySelect = (category) => {
-    setSelectedCategory(category);
-    
-    if (category === 'All') {
-      setFilteredProducts(products);
-    } else {
-      const filtered = products.filter(product => product.category === category);
-      setFilteredProducts(filtered);
-    }
-  };
-  
-  const handleSearch = (text) => {
-    setSearchQuery(text);
-    
-    if (text.trim() === '') {
-      handleCategorySelect(selectedCategory);
-    } else {
-      const filtered = products.filter(product => 
-        product.name.toLowerCase().includes(text.toLowerCase()) ||
-        product.description.toLowerCase().includes(text.toLowerCase())
+  const fetchShopRatings = async () => {
+    try {
+      const q = query(
+        collection(db, 'shopRatings'),
+        where('shopId', '==', shopId),
+        orderBy('createdAt', 'desc'),
+        limit(10)
       );
-      setFilteredProducts(filtered);
+      
+      const querySnapshot = await getDocs(q);
+      const fetchedRatings = [];
+      
+      querySnapshot.forEach((doc) => {
+        fetchedRatings.push({
+          id: doc.id,
+          ...doc.data(),
+          createdAt: doc.data().createdAt ? new Date(doc.data().createdAt.seconds * 1000) : new Date()
+        });
+      });
+      
+      setRatings(fetchedRatings);
+    } catch (error) {
+      console.error('Error fetching shop ratings:', error);
     }
   };
 
-  const handleAddToCart = () => {
-    if (selectedProduct) {
-      const productWithOptions = {
-        ...selectedProduct,
-        quantity,
-        specialInstructions,
-        shopId,
-        shopName: shopData.name,
-      };
-      
-      addToCart(productWithOptions);
-      setShowProductModal(false);
-      setSelectedProduct(null);
-      setQuantity(1);
-      setSpecialInstructions('');
+  const filterByCategory = (category) => {
+    setSelectedCategory(category);
+  };
+
+  const handleAddToCart = (item) => {
+    if (!shopData.isOpen) {
+      Alert.alert('Shop Closed', 'This shop is currently closed. Please try again later.');
+      return;
     }
-  };
-  
-  const openProductDetails = (product) => {
-    setSelectedProduct(product);
-    setQuantity(1);
-    setSpecialInstructions('');
-    setShowProductModal(true);
-  };
-  
-  const incrementQuantity = () => {
-    setQuantity(prev => prev + 1);
-  };
-  
-  const decrementQuantity = () => {
-    if (quantity > 1) {
-      setQuantity(prev => prev - 1);
-    }
-  };
-  
-  const toggleSearch = () => {
-    setShowSearch(prev => !prev);
-    setSearchQuery('');
     
-    if (!showSearch && searchInputRef.current) {
-      setTimeout(() => {
-        searchInputRef.current.focus();
-      }, 100);
-    }
+    addToCart(item, shopData);
+    Alert.alert('Success', `${item.name} added to cart!`);
   };
-  
-  const formatWeekday = (day) => {
-    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-    return days[day];
-  };
-  
-  const getCartQuantity = () => {
-    return cart.reduce((total, item) => {
-      if (item.shopId === shopId) {
-        return total + item.quantity;
-      }
-      return total;
-    }, 0);
-  };
-  
-  const renderHeader = () => (
-    <>
-      <Animated.View style={[styles.headerContainer, { height: headerHeight }]}>
-        <Animated.View style={[styles.headerContent, { opacity: headerOpacity }]}>
-          <View style={styles.shopImageContainer}>
-            {shopData.imageUrl ? (
-              <Image 
-                source={{ uri: shopData.imageUrl }} 
-                style={styles.shopImage}
-                resizeMode="cover"
-              />
-            ) : (
-              <View style={styles.noImageContainer}>
-                <MaterialIcons name="store" size={60} color="#ccc" />
-              </View>
-            )}
-          </View>
-        </Animated.View>
-        
-        <LinearGradient
-          colors={['rgba(0,0,0,0.7)', 'transparent']}
-          style={styles.headerGradient}
-        />
-        
-        <View style={styles.shopInfoContainer}>
-          <View style={styles.shopNameContainer}>
-            <Text style={styles.shopName}>{shopData.name}</Text>
-            <View style={styles.ratingContainer}>
-              <MaterialIcons name="star" size={16} color="#FFD700" />
-              <Text style={styles.ratingText}>{shopData.rating ? shopData.rating.toFixed(1) : '4.5'}</Text>
-            </View>
-          </View>
-          
-          {shopData.description && (
-            <Text style={styles.shopDescription} numberOfLines={2}>
-              {shopData.description}
-            </Text>
-          )}
-          
-          <View style={styles.shopMetaContainer}>
-            <TouchableOpacity style={styles.metaItem} onPress={() => setExpandedHours(!expandedHours)}>
-              <MaterialIcons name="access-time" size={16} color="#fff" />
-              <Text style={styles.metaText}>
-                {shopData.isOpen ? 'Open Now' : 'Closed'} · {shopData.openingTime} - {shopData.closingTime}
-              </Text>
-              <MaterialIcons 
-                name={expandedHours ? "keyboard-arrow-up" : "keyboard-arrow-down"} 
-                size={16} 
-                color="#fff" 
-              />
-            </TouchableOpacity>
-          </View>
-          
-          {expandedHours && (
-            <View style={styles.hoursContainer}>
-              {[0, 1, 2, 3, 4, 5, 6].map(day => (
-                <View key={day} style={styles.hourRow}>
-                  <Text style={styles.dayText}>{formatWeekday(day)}</Text>
-                  <Text style={styles.timeText}>{shopData.openingTime} - {shopData.closingTime}</Text>
-                </View>
-              ))}
-            </View>
-          )}
-        </View>
-      </Animated.View>
-      
-      <Animated.View style={[styles.headerBar, { opacity: titleOpacity }]}>
-        <Text style={styles.headerTitle}>{shopData.name}</Text>
-        {shopData.isOpen ? (
-          <View style={styles.pillBadge}>
-            <Text style={styles.pillBadgeText}>Open</Text>
-          </View>
-        ) : (
-          <View style={[styles.pillBadge, styles.closedBadge]}>
-            <Text style={styles.pillBadgeText}>Closed</Text>
-          </View>
-        )}
-      </Animated.View>
-      
-      <View style={styles.navbar}>
-        <TouchableOpacity 
-          style={styles.backButton} 
-          onPress={() => navigation.goBack()}
-        >
-          <MaterialIcons name="arrow-back" size={24} color="#fff" />
-        </TouchableOpacity>
-        
-        <View style={styles.navActions}>
-          <TouchableOpacity style={styles.navButton} onPress={toggleSearch}>
-            <MaterialIcons name="search" size={24} color="#fff" />
-          </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={styles.navButton}
-            onPress={() => navigation.navigate('Rating', { shopId, shopName: shopData.name })}
-          >
-            <MaterialIcons name="rate-review" size={24} color="#fff" />
-          </TouchableOpacity>
-        </View>
-      </View>
-      
-      {showSearch && (
-        <View style={styles.searchContainer}>
-          <View style={styles.searchInputContainer}>
-            <MaterialIcons name="search" size={24} color="#666" />
-            <TextInput
-              ref={searchInputRef}
-              style={styles.searchInput}
-              placeholder="Search menu items..."
-              value={searchQuery}
-              onChangeText={handleSearch}
-              placeholderTextColor="#999"
-              autoFocus
-            />
-            {searchQuery.length > 0 && (
-              <TouchableOpacity onPress={() => handleSearch('')}>
-                <MaterialIcons name="close" size={24} color="#666" />
-              </TouchableOpacity>
-            )}
-          </View>
-        </View>
-      )}
-      
-      <View style={styles.categoriesContainer}>
-        <ScrollView 
-          horizontal 
-          showsHorizontalScrollIndicator={false} 
-          contentContainerStyle={styles.categoriesScroll}
-        >
-          {categories.map(category => (
-            <TouchableOpacity 
-              key={category} 
-              style={[
-                styles.categoryItem,
-                selectedCategory === category && styles.selectedCategory
-              ]}
-              onPress={() => handleCategorySelect(category)}
-            >
-              <Text 
-                style={[
-                  styles.categoryItemText,
-                  selectedCategory === category && styles.selectedCategoryText
-                ]}
-              >
-                {category}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-      </View>
-    </>
-  );
 
-  const renderProductItem = ({ item }) => {
-    const itemInCart = getItemQuantity(item.id, shopId);
+  const formatDate = (date) => {
+    return date.toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    });
+  };
+
+  const getAverageRating = () => {
+    if (ratings.length === 0) return 0;
+    
+    const sum = ratings.reduce((total, rating) => total + rating.overall, 0);
+    return (sum / ratings.length).toFixed(1);
+  };
+
+  const renderStars = (rating) => {
+    const fullStars = Math.floor(rating);
+    const halfStar = rating % 1 >= 0.5;
+    const emptyStars = 5 - fullStars - (halfStar ? 1 : 0);
     
     return (
-      <TouchableOpacity 
-        style={styles.productCard}
-        onPress={() => openProductDetails(item)}
-        activeOpacity={0.8}
-      >
-        <View style={styles.productInfo}>
-          <Text style={styles.productName}>{item.name}</Text>
-          <Text style={styles.productDescription} numberOfLines={2}>
-            {item.description}
-          </Text>
-          <View style={styles.productFooter}>
-            <Text style={styles.productPrice}>₹{item.price.toFixed(2)}</Text>
-            {itemInCart > 0 && (
-              <View style={styles.inCartBadge}>
-                <Text style={styles.inCartText}>{itemInCart} in cart</Text>
-              </View>
-            )}
-          </View>
-        </View>
-        
-        <View style={styles.productImageContainer}>
-          {item.imageUrl ? (
-            <Image 
-              source={{ uri: item.imageUrl }} 
-              style={styles.productImage}
-              resizeMode="cover"
-            />
-          ) : (
-            <View style={styles.noProductImage}>
-              <MaterialIcons name="fastfood" size={30} color="#ccc" />
-            </View>
-          )}
-          
-          <TouchableOpacity 
-            style={styles.addButton}
-            onPress={() => openProductDetails(item)}
-          >
-            <MaterialIcons name="add" size={20} color="#fff" />
-          </TouchableOpacity>
-        </View>
-      </TouchableOpacity>
+      <View style={styles.starsContainer}>
+        {[...Array(fullStars)].map((_, i) => (
+          <MaterialIcons key={`full-${i}`} name="star" size={16} color="#FFD700" />
+        ))}
+        {halfStar && <MaterialIcons name="star-half" size={16} color="#FFD700" />}
+        {[...Array(emptyStars)].map((_, i) => (
+          <MaterialIcons key={`empty-${i}`} name="star-border" size={16} color="#FFD700" />
+        ))}
+      </View>
     );
   };
-  
-  const renderEmptyProducts = () => (
-    <View style={styles.emptyContainer}>
-      <MaterialIcons name="search-off" size={80} color="#ddd" />
-      <Text style={styles.emptyTitle}>No items found</Text>
-      <Text style={styles.emptyText}>
-        Try adjusting your search or category filter
-      </Text>
-    </View>
-  );
 
-  const renderProductModal = () => (
-    <Modal
-      visible={showProductModal}
-      transparent={true}
-      animationType="slide"
-      onRequestClose={() => setShowProductModal(false)}
-    >
-      <BlurView 
-        intensity={Platform.OS === 'ios' ? 90 : 100} 
-        style={styles.modalBlur}
-        tint="dark"
-      >
-        <View style={styles.modalContent}>
-          <TouchableOpacity 
-            style={styles.closeButton}
-            onPress={() => setShowProductModal(false)}
-          >
-            <MaterialIcons name="close" size={24} color="#333" />
-          </TouchableOpacity>
-          
-          {selectedProduct?.imageUrl ? (
-            <Image 
-              source={{ uri: selectedProduct.imageUrl }} 
-              style={styles.modalImage}
-              resizeMode="cover"
-            />
-          ) : (
-            <View style={styles.modalNoImage}>
-              <MaterialIcons name="fastfood" size={60} color="#ccc" />
-            </View>
-          )}
-          
-          <View style={styles.modalInfo}>
-            <Text style={styles.modalProductName}>{selectedProduct?.name}</Text>
-            <Text style={styles.modalProductPrice}>₹{selectedProduct?.price.toFixed(2)}</Text>
-            <Text style={styles.modalProductDescription}>{selectedProduct?.description}</Text>
-            
-            <View style={styles.quantityContainer}>
-              <Text style={styles.sectionTitle}>Quantity</Text>
-              <View style={styles.quantityControl}>
-                <TouchableOpacity 
-                  style={[styles.quantityButton, quantity <= 1 && styles.quantityButtonDisabled]}
-                  onPress={decrementQuantity}
-                  disabled={quantity <= 1}
-                >
-                  <MaterialIcons name="remove" size={22} color={quantity <= 1 ? "#ccc" : "#333"} />
-                </TouchableOpacity>
-                
-                <Text style={styles.quantityText}>{quantity}</Text>
-                
-                <TouchableOpacity 
-                  style={styles.quantityButton}
-                  onPress={incrementQuantity}
-                >
-                  <MaterialIcons name="add" size={22} color="#333" />
-                </TouchableOpacity>
-              </View>
-            </View>
-            
-            <View style={styles.specialInstructionsContainer}>
-              <Text style={styles.sectionTitle}>Special Instructions</Text>
-              <TextInput
-                style={styles.specialInstructionsInput}
-                placeholder="Add special instructions (optional)"
-                placeholderTextColor="#999"
-                multiline
-                value={specialInstructions}
-                onChangeText={setSpecialInstructions}
-              />
-            </View>
-            
-            <TouchableOpacity 
-              style={styles.addToCartButton}
-              onPress={handleAddToCart}
+  const renderMenuItem = ({ item }) => (
+    <Card style={styles.menuItemCard}>
+      {item.imageUrl && (
+        <Card.Cover 
+          source={{ uri: item.imageUrl }} 
+          style={styles.menuItemImage} 
+        />
+      )}
+      <Card.Content style={styles.menuItemContent}>
+        <View style={styles.menuItemDetails}>
+          <Text style={styles.menuItemName} numberOfLines={1}>{item.name}</Text>
+          <Text style={styles.menuItemDescription} numberOfLines={2}>
+            {item.description || 'No description available'}
+          </Text>
+          <View style={styles.menuItemFooter}>
+            <Text style={styles.menuItemPrice}>₹{item.price.toFixed(2)}</Text>
+            <Button 
+              mode="contained" 
+              onPress={() => handleAddToCart(item)}
+              style={styles.addButton}
+              buttonColor="#ff8c00"
+              compact
             >
-              <Text style={styles.addToCartButtonText}>
-                Add to Cart - ₹{(selectedProduct?.price * quantity).toFixed(2)}
-              </Text>
-            </TouchableOpacity>
+              Add
+            </Button>
           </View>
         </View>
-      </BlurView>
-    </Modal>
+      </Card.Content>
+    </Card>
+  );
+
+  const renderMenuItemRow = ({ item }) => (
+    <Card style={styles.menuItemRowCard}>
+      <View style={styles.menuItemRowContent}>
+        <View style={styles.menuItemRowDetails}>
+          <Text style={styles.menuItemName} numberOfLines={1}>{item.name}</Text>
+          <Text style={styles.menuItemDescription} numberOfLines={2}>
+            {item.description || 'No description available'}
+          </Text>
+          <View style={styles.menuItemRowFooter}>
+            <Text style={styles.menuItemPrice}>₹{item.price.toFixed(2)}</Text>
+            <Button 
+              mode="contained" 
+              onPress={() => handleAddToCart(item)}
+              style={styles.addButton}
+              buttonColor="#ff8c00"
+              compact
+            >
+              Add
+            </Button>
+          </View>
+        </View>
+        {item.imageUrl ? (
+          <Image 
+            source={{ uri: item.imageUrl }} 
+            style={styles.menuItemRowImage} 
+            resizeMode="cover"
+          />
+        ) : (
+          <View style={styles.noImageContainer}>
+            <MaterialIcons name="restaurant" size={30} color="#ddd" />
+          </View>
+        )}
+      </View>
+    </Card>
+  );
+
+  const renderCategoryItem = ({ item }) => (
+    <TouchableOpacity
+      style={[
+        styles.categoryChip,
+        selectedCategory === item && styles.selectedCategoryChip
+      ]}
+      onPress={() => filterByCategory(item)}
+    >
+      <Text 
+        style={[
+          styles.categoryText,
+          selectedCategory === item && styles.selectedCategoryText
+        ]}
+      >
+        {item === 'all' ? 'All' : item}
+      </Text>
+    </TouchableOpacity>
+  );
+
+  const renderSectionHeader = ({ section }) => (
+    <View style={styles.sectionHeader}>
+      <Text style={styles.sectionTitle}>{section.title}</Text>
+    </View>
   );
 
   if (loading) {
@@ -484,507 +273,336 @@ const ShopDetailScreen = ({ route, navigation }) => {
   }
 
   return (
-    <View style={styles.container}>
-      <StatusBar translucent backgroundColor="transparent" barStyle="light-content" />
+    <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor="#fff" />
       
-      <Animated.FlatList
-        data={filteredProducts}
-        renderItem={renderProductItem}
-        keyExtractor={item => item.id}
-        contentContainerStyle={styles.productsList}
-        showsVerticalScrollIndicator={false}
-        ListHeaderComponent={renderHeader}
-        ListEmptyComponent={renderEmptyProducts}
-        onScroll={Animated.event(
-          [{ nativeEvent: { contentOffset: { y: scrollY } } }],
-          { useNativeDriver: false }
-        )}
-        scrollEventThrottle={16}
-      />
-      
-      {getCartQuantity() > 0 && (
-        <TouchableOpacity 
-          style={styles.viewCartButton}
-          onPress={() => navigation.navigate('Cart')}
-        >
-          <View style={styles.cartButtonContent}>
-            <View style={styles.cartInfo}>
-              <Badge style={styles.cartBadge}>{getCartQuantity()}</Badge>
-              <Text style={styles.viewCartText}>View Cart</Text>
+      <View style={styles.shopInfoContainer}>
+        <View style={styles.shopInfoHeader}>
+          <View style={styles.shopDetails}>
+            <Text style={styles.shopName}>{shopName}</Text>
+            <View style={styles.ratingContainer}>
+              {ratings.length > 0 && (
+                <>
+                  <Text style={styles.ratingScore}>{getAverageRating()}</Text>
+                  {renderStars(parseFloat(getAverageRating()))}
+                  <Text style={styles.reviewCount}>({ratings.length})</Text>
+                </>
+              )}
             </View>
-            <MaterialIcons name="shopping-cart" size={24} color="#fff" />
+            <View style={styles.shopInfoRow}>
+              <MaterialIcons name="access-time" size={16} color="#666" />
+              <Text style={styles.shopHours}>
+                {' '}{shopData.openingTime} - {shopData.closingTime}
+              </Text>
+              <Badge 
+                style={[
+                  styles.statusBadge, 
+                  shopData.isOpen ? styles.openBadge : styles.closedBadge
+                ]}
+              >
+                {shopData.isOpen ? 'Open' : 'Closed'}
+              </Badge>
+            </View>
+            <View style={styles.shopInfoRow}>
+              <MaterialIcons name="location-on" size={16} color="#666" />
+              <Text style={styles.shopLocation}>
+                {' '}{shopData.location}
+              </Text>
+            </View>
           </View>
+        </View>
+        
+        {shopData.description && (
+          <Text style={styles.shopDescription}>{shopData.description}</Text>
+        )}
+      </View>
+
+      <Divider style={styles.divider} />
+
+      <View style={styles.categoriesContainer}>
+        <FlatList
+          data={categories}
+          renderItem={renderCategoryItem}
+          keyExtractor={(item) => item}
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.categoriesList}
+        />
+        
+        <TouchableOpacity 
+          style={styles.viewToggle}
+          onPress={() => setViewMode(viewMode === 'grid' ? 'list' : 'grid')}
+        >
+          <MaterialIcons 
+            name={viewMode === 'grid' ? 'view-list' : 'grid-view'} 
+            size={24} 
+            color="#666" 
+          />
         </TouchableOpacity>
+      </View>
+
+      {viewMode === 'grid' ? (
+        <FlatList
+          data={filteredMenu}
+          renderItem={renderMenuItem}
+          keyExtractor={(item) => item.id}
+          numColumns={2}
+          contentContainerStyle={styles.menuGrid}
+          columnWrapperStyle={styles.menuRow}
+          showsVerticalScrollIndicator={false}
+        />
+      ) : (
+        <SectionList
+          sections={groupedMenu}
+          keyExtractor={(item) => item.id}
+          renderItem={({ item }) => renderMenuItemRow({ item })}
+          renderSectionHeader={renderSectionHeader}
+          contentContainerStyle={styles.menuList}
+          stickySectionHeadersEnabled={true}
+          showsVerticalScrollIndicator={false}
+        />
       )}
-      
-      {renderProductModal()}
-    </View>
+
+      {getItemCount() > 0 && (
+        <FAB
+          style={styles.cartFab}
+          icon="cart"
+          label={`${getItemCount()} items`}
+          onPress={() => navigation.navigate('Cart')}
+          color="#fff"
+        />
+      )}
+    </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#fff',
   },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: '#fff',
   },
   loadingText: {
-    marginTop: 12,
+    marginTop: 16,
     fontSize: 16,
     color: '#666',
   },
-  headerContainer: {
-    height: 250,
-    position: 'relative',
-    overflow: 'hidden',
-  },
-  headerContent: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#ff8c00',
-  },
-  headerGradient: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 100,
-    zIndex: 1,
-  },
-  shopImageContainer: {
-    width: '100%',
-    height: '100%',
-  },
-  shopImage: {
-    width: '100%',
-    height: '100%',
-  },
-  noImageContainer: {
-    width: '100%',
-    height: '100%',
-    backgroundColor: '#ff8c00',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
   shopInfoContainer: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
     padding: 16,
-    zIndex: 2,
+    backgroundColor: '#fff',
+    elevation: 2,
   },
-  shopNameContainer: {
+  shopInfoHeader: {
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 10,
+  },
+  shopDetails: {
+    flex: 1,
   },
   shopName: {
     fontSize: 24,
     fontWeight: 'bold',
-    color: '#fff',
-    flex: 1,
+    color: '#333',
+    marginBottom: 5,
   },
   ratingContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.3)',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
+    marginBottom: 8,
   },
-  ratingText: {
-    marginLeft: 4,
-    color: '#fff',
+  ratingScore: {
     fontWeight: 'bold',
-  },
-  shopDescription: {
-    fontSize: 14,
-    color: 'rgba(255,255,255,0.9)',
-    marginTop: 8,
-    marginBottom: 12,
-  },
-  shopMetaContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  metaItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginRight: 16,
-  },
-  metaText: {
-    marginLeft: 4,
-    color: '#fff',
-    fontSize: 14,
     marginRight: 4,
+    color: '#333',
   },
-  hoursContainer: {
-    backgroundColor: 'rgba(0,0,0,0.3)',
-    padding: 12,
-    borderRadius: 8,
-    marginTop: 8,
-  },
-  hourRow: {
+  starsContainer: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingVertical: 4,
   },
-  dayText: {
-    color: '#fff',
+  reviewCount: {
+    color: '#666',
+    marginLeft: 4,
+    fontSize: 12,
   },
-  timeText: {
-    color: '#fff',
-  },
-  headerBar: {
+  shopInfoRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 60,
-    paddingTop: StatusBar.currentHeight,
-    backgroundColor: '#ff8c00',
-    zIndex: 10,
+    marginBottom: 5,
   },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#fff',
+  shopHours: {
+    fontSize: 14,
+    color: '#666',
+    flex: 1,
   },
-  pillBadge: {
-    backgroundColor: '#4CAF50',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 12,
-    marginLeft: 8,
+  shopLocation: {
+    fontSize: 14,
+    color: '#666',
+    flex: 1,
   },
-  closedBadge: {
-    backgroundColor: '#F44336',
-  },
-  pillBadgeText: {
-    color: '#fff',
+  statusBadge: {
     fontSize: 12,
     fontWeight: 'bold',
   },
-  navbar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    paddingHorizontal: 16,
-    paddingTop: StatusBar.currentHeight + 8,
-    paddingBottom: 8,
-    zIndex: 20,
+  openBadge: {
+    backgroundColor: '#e6f7e9',
+    color: '#4caf50',
   },
-  backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.3)',
+  closedBadge: {
+    backgroundColor: '#ffeaea',
+    color: '#f44336',
   },
-  navActions: {
-    flexDirection: 'row',
+  shopDescription: {
+    fontSize: 14,
+    color: '#666',
+    lineHeight: 20,
+    marginTop: 5,
   },
-  navButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.3)',
-    marginLeft: 8,
-  },
-  searchContainer: {
-    padding: 16,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
-  },
-  searchInputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  divider: {
+    height: 1.5,
     backgroundColor: '#f0f0f0',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    height: 48,
-  },
-  searchInput: {
-    flex: 1,
-    marginLeft: 8,
-    fontSize: 16,
   },
   categoriesContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: '#fff',
     borderBottomWidth: 1,
-    borderBottomColor: '#eee',
-  },
-  categoriesScroll: {
-    paddingHorizontal: 8,
+    borderBottomColor: '#f0f0f0',
     paddingVertical: 12,
   },
-  categoryItem: {
+  categoriesList: {
+    paddingHorizontal: 16,
+    flexGrow: 1,
+  },
+  categoryChip: {
     paddingHorizontal: 16,
     paddingVertical: 8,
-    marginHorizontal: 6,
     borderRadius: 20,
-    backgroundColor: '#f0f0f0',
+    backgroundColor: '#f5f5f5',
+    marginRight: 10,
   },
-  selectedCategory: {
+  selectedCategoryChip: {
     backgroundColor: '#ff8c00',
   },
-  categoryItemText: {
-    fontSize: 14,
-    fontWeight: '500',
+  categoryText: {
     color: '#666',
+    fontWeight: '500',
   },
   selectedCategoryText: {
     color: '#fff',
     fontWeight: 'bold',
   },
-  productsList: {
-    paddingBottom: 80,
+  viewToggle: {
+    padding: 10,
+    marginRight: 10,
   },
-  productCard: {
-    flexDirection: 'row',
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    marginHorizontal: 16,
-    marginTop: 16,
-    padding: 12,
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
+  menuGrid: {
+    padding: 8,
   },
-  productInfo: {
-    flex: 1,
-    marginRight: 12,
-  },
-  productName: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 6,
-  },
-  productDescription: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 8,
-  },
-  productFooter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  productPrice: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#ff8c00',
-  },
-  inCartBadge: {
-    backgroundColor: '#E3F2FD',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 12,
-    marginLeft: 8,
-  },
-  inCartText: {
-    fontSize: 12,
-    color: '#2196F3',
-  },
-  productImageContainer: {
-    position: 'relative',
-    width: 90,
-    height: 90,
-    borderRadius: 8,
-    overflow: 'hidden',
-  },
-  productImage: {
-    width: '100%',
-    height: '100%',
-  },
-  noProductImage: {
-    width: '100%',
-    height: '100%',
-    backgroundColor: '#f0f0f0',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  addButton: {
-    position: 'absolute',
-    bottom: 0,
-    right: 0,
-    backgroundColor: '#ff8c00',
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  emptyContainer: {
-    padding: 40,
-    alignItems: 'center',
-  },
-  emptyTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#333',
-    marginTop: 16,
-  },
-  emptyText: {
-    fontSize: 14,
-    color: '#666',
-    textAlign: 'center',
-    marginTop: 8,
-  },
-  viewCartButton: {
-    position: 'absolute',
-    bottom: 20,
-    left: 20,
-    right: 20,
-    backgroundColor: '#ff8c00',
-    padding: 16,
-    borderRadius: 8,
-    elevation: 4,
-  },
-  cartButtonContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  menuRow: {
     justifyContent: 'space-between',
   },
-  cartInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  menuList: {
+    paddingBottom: 80,
   },
-  cartBadge: {
-    backgroundColor: '#fff',
-    color: '#ff8c00',
-    fontWeight: 'bold',
+  menuItemCard: {
+    width: '48%',
+    marginBottom: 16,
+    borderRadius: 12,
+    overflow: 'hidden',
+    elevation: 2,
   },
-  viewCartText: {
-    color: '#fff',
-    fontWeight: 'bold',
-    fontSize: 16,
-    marginLeft: 8,
+  menuItemImage: {
+    height: 120,
   },
-  modalBlur: {
+  menuItemContent: {
+    padding: 10,
+  },
+  menuItemDetails: {
     flex: 1,
-    justifyContent: 'flex-end',
   },
-  modalContent: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    maxHeight: height * 0.8,
-  },
-  closeButton: {
-    position: 'absolute',
-    top: 16,
-    right: 16,
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#fff',
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 10,
-    elevation: 5,
-  },
-  modalImage: {
-    width: '100%',
-    height: 200,
-  },
-  modalNoImage: {
-    width: '100%',
-    height: 200,
-    backgroundColor: '#f0f0f0',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modalInfo: {
-    padding: 16,
-  },
-  modalProductName: {
-    fontSize: 20,
+  menuItemName: {
+    fontSize: 16,
     fontWeight: 'bold',
     color: '#333',
     marginBottom: 4,
   },
-  modalProductPrice: {
-    fontSize: 18,
+  menuItemDescription: {
+    fontSize: 14,
+    color: '#777',
+    marginBottom: 8,
+    lineHeight: 18,
+  },
+  menuItemFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  menuItemPrice: {
+    fontSize: 16,
     fontWeight: 'bold',
     color: '#ff8c00',
-    marginBottom: 12,
   },
-  modalProductDescription: {
-    fontSize: 16,
-    color: '#666',
-    marginBottom: 20,
-    lineHeight: 24,
+  addButton: {
+    borderRadius: 4,
+    elevation: 0,
+  },
+  menuItemRowCard: {
+    marginBottom: 10,
+    marginHorizontal: 16,
+    borderRadius: 12,
+    overflow: 'hidden',
+    elevation: 2,
+  },
+  menuItemRowContent: {
+    flexDirection: 'row',
+    padding: 12,
+  },
+  menuItemRowDetails: {
+    flex: 1,
+    marginRight: 10,
+  },
+  menuItemRowFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  menuItemRowImage: {
+    width: 80,
+    height: 80,
+    borderRadius: 8,
+  },
+  noImageContainer: {
+    width: 80,
+    height: 80,
+    backgroundColor: '#f0f0f0',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 8,
+  },
+  sectionHeader: {
+    backgroundColor: '#fff',
+    padding: 16,
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
   },
   sectionTitle: {
     fontSize: 18,
     fontWeight: 'bold',
     color: '#333',
-    marginBottom: 12,
   },
-  quantityContainer: {
-    marginBottom: 20,
-  },
-  quantityControl: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  quantityButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#f0f0f0',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  quantityButtonDisabled: {
-    opacity: 0.5,
-  },
-  quantityText: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginHorizontal: 20,
-  },
-  specialInstructionsContainer: {
-    marginBottom: 24,
-  },
-  specialInstructionsInput: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 16,
-    minHeight: 80,
-    textAlignVertical: 'top',
-  },
-  addToCartButton: {
+  cartFab: {
+    position: 'absolute',
+    bottom: 16,
+    right: 16,
     backgroundColor: '#ff8c00',
-    padding: 16,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginBottom: Platform.OS === 'ios' ? 34 : 16,
-  },
-  addToCartButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
   },
 });
 

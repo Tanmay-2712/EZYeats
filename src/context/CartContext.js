@@ -35,7 +35,46 @@ export const CartProvider = ({ children }) => {
     }
   };
 
-  // Remove item from cart
+  // Increment item quantity
+  const incrementItem = (itemId) => {
+    const existingItemIndex = cart.findIndex(cartItem => cartItem.id === itemId);
+    
+    if (existingItemIndex !== -1) {
+      const newCart = [...cart];
+      newCart[existingItemIndex].quantity += 1;
+      setCart(newCart);
+    }
+  };
+
+  // Decrement item quantity
+  const decrementItem = (itemId) => {
+    const existingItemIndex = cart.findIndex(cartItem => cartItem.id === itemId);
+    
+    if (existingItemIndex !== -1) {
+      const newCart = [...cart];
+      if (newCart[existingItemIndex].quantity > 1) {
+        // Reduce quantity
+        newCart[existingItemIndex].quantity -= 1;
+        setCart(newCart);
+      } else {
+        // Remove item from cart if quantity will be 0
+        removeItem(itemId);
+      }
+    }
+  };
+
+  // Remove specific item completely
+  const removeItem = (itemId) => {
+    const newCart = cart.filter(item => item.id !== itemId);
+    setCart(newCart);
+    
+    // If cart is empty, reset shop info
+    if (newCart.length === 0) {
+      setShopInfo(null);
+    }
+  };
+
+  // Remove item from cart (decrease quantity or remove)
   const removeFromCart = (itemId) => {
     const existingItemIndex = cart.findIndex(cartItem => cartItem.id === itemId);
     
@@ -66,19 +105,26 @@ export const CartProvider = ({ children }) => {
 
   // Get total price
   const getTotalPrice = () => {
-    return cart.reduce((total, item) => total + (item.price * item.quantity), 0);
+    return cart.reduce((total, item) => total + ((item.price || 0) * (item.quantity || 1)), 0);
   };
 
   // Get cart item count
   const getItemCount = () => {
-    return cart.reduce((total, item) => total + item.quantity, 0);
+    return cart.reduce((total, item) => total + (item.quantity || 1), 0);
   };
+
+  // Calculate total amount
+  const totalAmount = getTotalPrice();
 
   const value = {
     cart,
-    shopInfo,
+    shopData: shopInfo,
+    totalAmount,
     addToCart,
     removeFromCart,
+    incrementItem,
+    decrementItem,
+    removeItem,
     clearCart,
     getTotalPrice,
     getItemCount

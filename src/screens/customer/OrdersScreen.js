@@ -1,21 +1,45 @@
-import React, { useState, useEffect } from 'react';
-import { StyleSheet, View, Text, FlatList, TouchableOpacity, Alert, ActivityIndicator, RefreshControl } from 'react-native';
-import { Card, Chip, Badge } from 'react-native-paper';
-import { MaterialIcons } from '@expo/vector-icons';
-import { collection, query, where, getDocs, doc, updateDoc } from 'firebase/firestore';
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+  StyleSheet, 
+  View, 
+  Text, 
+  FlatList, 
+  TouchableOpacity, 
+  Alert, 
+  ActivityIndicator, 
+  RefreshControl, 
+  SafeAreaView,
+  StatusBar,
+  Image,
+  Animated,
+  ScrollView
+} from 'react-native';
+import { Card, Chip, Badge, Divider, Button, Searchbar, Avatar } from 'react-native-paper';
+import { MaterialIcons, FontAwesome5, Ionicons } from '@expo/vector-icons';
+import { collection, query, where, getDocs, doc, updateDoc, orderBy, Timestamp } from 'firebase/firestore';
 import { ref, onValue, update } from 'firebase/database';
 import { db, rtdb } from '../../firebase/config';
 import { useAuth } from '../../context/AuthContext';
+import moment from 'moment';
 
 const OrdersScreen = ({ navigation }) => {
   const { currentUser } = useAuth();
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [selectedFilter, setSelectedFilter] = useState('all');
+  const [selectedStatus, setSelectedStatus] = useState('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const fadeAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     const unsubscribe = setupRealtimeOrdersListener();
+    
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 800,
+      useNativeDriver: true,
+    }).start();
+    
     return () => {
       if (typeof unsubscribe === 'function') {
         unsubscribe();
@@ -70,437 +94,540 @@ const OrdersScreen = ({ navigation }) => {
     try {
       setLoading(true);
       
-      const orderRef = collection(db, 'orders');
-      // Use a simpler query that doesn't require a composite index
-      // Filter by customerId first
-      const q = query(
-        orderRef,
-        where('customerId', '==', currentUser.uid)
+      const ordersQuery = query(
+        collection(db, 'orders'),
+        where('customerId', '==', currentUser.uid),
+        orderBy('createdAt', 'desc')
       );
       
-      const querySnapshot = await getDocs(q);
-      const ordersList = [];
+      const ordersSnapshot = await getDocs(ordersQuery);
+      const ordersData = ordersSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        createdAt: doc.data().createdAt?.toDate() || new Date(),
+      }));
       
-      querySnapshot.forEach((doc) => {
-        const data = doc.data();
-        const createdAt = data.createdAt ? new Date(data.createdAt.seconds * 1000) : new Date();
-        
-        ordersList.push({
-          id: doc.id,
-          ...data,
-          createdAt,
-        });
-      });
+      setOrders(ordersData);
       
-      // Sort the orders by createdAt client-side instead of in the query
-      ordersList.sort((a, b) => b.createdAt - a.createdAt);
+      // Start fade-in animation
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 500,
+        useNativeDriver: true
+      }).start();
       
-      setOrders(ordersList);
-      setLoading(false);
     } catch (error) {
       console.error('Error fetching orders:', error);
+    } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
-  const filterOrders = (filter) => {
-    setSelectedFilter(filter);
+  const onRefresh = () => {
+    setRefreshing(true);
+    fetchOrdersFromFirestore();
+  };
+
+  const cancelOrder = async (order) => {
+    try {
+      // Update Firestore
+      const orderRef = doc(db, 'orders', order.id);
+      await updateDoc(orderRef, {
+        status: 'cancelled',
+        cancelledAt: Timestamp.now(),
+        updatedAt: Timestamp.now()
+      });
+      
+      // Update Realtime Database if needed
+      const customerOrderRef = ref(rtdb, `customerOrders/${currentUser.uid}/${order.id}`);
+      const shopOrderRef = ref(rtdb, `shopOrders/${order.shopId}/${order.id}`);
+      
+      update(customerOrderRef, {
+        status: 'cancelled',
+        cancelledAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      });
+      
+      update(shopOrderRef, {
+        status: 'cancelled',
+        cancelledAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      });
+      
+      // Update local state
+      setOrders(prevOrders => 
+        prevOrders.map(o => 
+          o.id === order.id 
+            ? {...o, status: 'cancelled', cancelledAt: new Date(), updatedAt: new Date()} 
+            : o
+        )
+      );
+    } catch (error) {
+      console.error('Error cancelling order:', error);
+    }
   };
 
   const getFilteredOrders = () => {
-    if (selectedFilter === 'all') {
-      return orders;
+    let filtered = orders;
+    
+    // Apply status filter
+    if (selectedStatus !== 'all') {
+      filtered = filtered.filter(order => order.status === selectedStatus);
     }
     
-    return orders.filter(order => {
-      if (selectedFilter === 'active') {
-        return ['pending', 'confirmed', 'preparing', 'ready'].includes(order.status);
-      }
-      if (selectedFilter === 'completed') {
-        return order.status === 'completed';
-      }
-      if (selectedFilter === 'cancelled') {
-        return order.status === 'cancelled';
-      }
-      return true;
-    });
+    // Apply search filter
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase().trim();
+      filtered = filtered.filter(order => 
+        order.shopName.toLowerCase().includes(query) ||
+        order.id.toLowerCase().includes(query) ||
+        `#${order.id.substring(0, 8)}`.toLowerCase().includes(query)
+      );
+    }
+    
+    return filtered;
   };
 
-  const cancelOrder = async (orderId) => {
-    try {
-      // Check if order exists and is in pending status
-      const orderIndex = orders.findIndex(order => order.id === orderId);
-      if (orderIndex === -1) {
-        Alert.alert('Error', 'Order not found');
-        return;
-      }
-      
-      const order = orders[orderIndex];
-      if (order.status !== 'pending') {
-        Alert.alert('Cannot Cancel', 'Only pending orders can be cancelled');
-        return;
-      }
-      
-      const timestamp = new Date();
-      
-      // Update order status in Firestore
-      await updateDoc(doc(db, 'orders', orderId), {
-        status: 'cancelled',
-        updatedAt: timestamp
-      });
-      
-      // Update in Realtime Database as well
-      try {
-        // Update in customer's orders
-        await update(ref(rtdb, `customerOrders/${currentUser.uid}/${orderId}`), {
-          status: 'cancelled',
-          updatedAt: timestamp.toISOString()
-        });
-        
-        // Also update in shop's orders
-        if (order.shopId) {
-          await update(ref(rtdb, `shopOrders/${order.shopId}/${orderId}`), {
-            status: 'cancelled',
-            updatedAt: timestamp.toISOString()
-          });
-        }
-      } catch (rtdbError) {
-        console.error('Failed to update Realtime Database:', rtdbError);
-        // Continue even if Realtime DB update fails
-      }
-      
-      // Update local state (should happen automatically with the listener, but update anyway)
-      const updatedOrders = [...orders];
-      updatedOrders[orderIndex] = { ...order, status: 'cancelled' };
-      setOrders(updatedOrders);
-      
-      Alert.alert('Success', 'Order cancelled successfully');
-    } catch (error) {
-      console.error('Error cancelling order:', error);
-      Alert.alert('Error', 'Failed to cancel order. Please try again.');
+  const getStatusColor = (status) => {
+    switch (status) {
+      case 'pending':
+        return '#FFC107';
+      case 'accepted':
+        return '#2196F3';
+      case 'preparing':
+        return '#FF9800';
+      case 'ready':
+        return '#4CAF50';
+      case 'completed':
+        return '#4CAF50';
+      case 'cancelled':
+        return '#F44336';
+      default:
+        return '#9E9E9E';
     }
   };
 
-  const handleCancelOrder = (orderId) => {
-    Alert.alert(
-      'Cancel Order',
-      'Are you sure you want to cancel this order?',
-      [
-        {
-          text: 'No',
-          style: 'cancel',
-        },
-        {
-          text: 'Yes, Cancel',
-          style: 'destructive',
-          onPress: () => cancelOrder(orderId),
-        },
-      ]
+  const getStatusIcon = (status) => {
+    switch (status) {
+      case 'pending':
+        return <MaterialIcons name="hourglass-top" size={18} color="#FFC107" />;
+      case 'accepted':
+        return <MaterialIcons name="check-circle" size={18} color="#2196F3" />;
+      case 'preparing':
+        return <MaterialIcons name="food-fork-drink" size={18} color="#FF9800" />;
+      case 'ready':
+        return <MaterialIcons name="delivery-dining" size={18} color="#4CAF50" />;
+      case 'completed':
+        return <MaterialIcons name="done-all" size={18} color="#4CAF50" />;
+      case 'cancelled':
+        return <MaterialIcons name="cancel" size={18} color="#F44336" />;
+      default:
+        return <MaterialIcons name="help" size={18} color="#9E9E9E" />;
+    }
+  };
+
+  const formatStatus = (status) => {
+    return status.charAt(0).toUpperCase() + status.slice(1);
+  };
+
+  const renderOrderItem = ({ item }) => {
+    const statusColor = getStatusColor(item.status);
+    const statusIcon = getStatusIcon(item.status);
+    const canCancel = ['pending', 'accepted'].includes(item.status);
+    const orderDate = moment(item.createdAt).format('MMM DD, YYYY • h:mm A');
+    const orderItems = Array.isArray(item.items) ? item.items : [];
+    const itemsCount = orderItems.length;
+    
+    return (
+      <Animated.View style={[styles.orderItemContainer, { opacity: fadeAnim }]}>
+        <Card style={styles.orderCard}>
+          <Card.Content>
+            <View style={styles.orderHeader}>
+              <View style={styles.shopInfo}>
+                <Avatar.Icon 
+                  size={40} 
+                  icon="store" 
+                  color="#fff"
+                  style={{ backgroundColor: '#ff8c00' }} 
+                />
+                <View style={styles.shopDetails}>
+                  <Text style={styles.shopName}>{item.shopName}</Text>
+                  <Text style={styles.orderId}>#{item.id.substring(0, 8)}</Text>
+                </View>
+              </View>
+              <View style={[styles.statusContainer, { borderColor: statusColor }]}>
+                {statusIcon}
+                <Text style={[styles.statusText, { color: statusColor }]}>
+                  {formatStatus(item.status)}
+                </Text>
+              </View>
+            </View>
+            
+            <Divider style={styles.divider} />
+            
+            <View style={styles.orderDetails}>
+              <View style={styles.detailRow}>
+                <MaterialIcons name="access-time" size={16} color="#757575" />
+                <Text style={styles.detailText}>{orderDate}</Text>
+              </View>
+              
+              <View style={styles.detailRow}>
+                <MaterialIcons name="shopping-basket" size={16} color="#757575" />
+                <Text style={styles.detailText}>{itemsCount} {itemsCount === 1 ? 'item' : 'items'}</Text>
+              </View>
+              
+              <View style={styles.detailRow}>
+                <MaterialIcons name="payments" size={16} color="#757575" />
+                <Text style={styles.detailText}>₹{item.totalAmount.toFixed(2)}</Text>
+              </View>
+            </View>
+            
+            <View style={styles.orderActions}>
+              <Button 
+                mode="outlined" 
+                onPress={() => navigation.navigate('OrderDetail', { orderId: item.id })}
+                style={styles.viewButton}
+                labelStyle={styles.viewButtonLabel}
+                icon="eye"
+              >
+                View Details
+              </Button>
+              
+              {canCancel && (
+                <Button 
+                  mode="outlined" 
+                  onPress={() => cancelOrder(item)}
+                  style={styles.cancelButton}
+                  labelStyle={styles.cancelButtonLabel}
+                  icon="close-circle"
+                >
+                  Cancel
+                </Button>
+              )}
+            </View>
+          </Card.Content>
+        </Card>
+      </Animated.View>
     );
   };
 
-  const onRefresh = async () => {
-    setRefreshing(true);
-    // For Realtime Database, just wait a bit as the listener should update automatically
-    setTimeout(() => setRefreshing(false), 1000);
+  const renderEmptyList = () => {
+    if (loading) return null;
+    
+    return (
+      <View style={styles.emptyContainer}>
+        <Image
+          source={require('../../assets/images/empty-orders.png')}
+          style={styles.emptyImage}
+          resizeMode="contain"
+        />
+        <Text style={styles.emptyTitle}>No Orders Found</Text>
+        <Text style={styles.emptyText}>
+          {searchQuery || selectedStatus !== 'all'
+            ? "Try changing your filters"
+            : "You haven't placed any orders yet"}
+        </Text>
+      </View>
+    );
   };
 
-  const formatDate = (date) => {
-    return date.toLocaleString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  };
-
-  const getStatusChipStyle = (status) => {
-    switch (status) {
-      case 'pending':
-        return styles.pendingChip;
-      case 'confirmed':
-        return styles.confirmedChip;
-      case 'preparing':
-        return styles.preparingChip;
-      case 'ready':
-        return styles.readyChip;
-      case 'completed':
-        return styles.completedChip;
-      case 'cancelled':
-        return styles.cancelledChip;
-      default:
-        return {};
-    }
-  };
-
-  const getStatusLabel = (status) => {
-    switch (status) {
-      case 'pending':
-        return 'Pending';
-      case 'confirmed':
-        return 'Confirmed';
-      case 'preparing':
-        return 'Preparing';
-      case 'ready':
-        return 'Ready for Pickup';
-      case 'completed':
-        return 'Completed';
-      case 'cancelled':
-        return 'Cancelled';
-      default:
-        return status;
-    }
-  };
-
-  const renderOrderItem = ({ item }) => (
-    <TouchableOpacity
-      onPress={() => navigation.navigate('OrderDetail', { orderId: item.id })}
-    >
-      <Card style={styles.orderCard}>
-        <Card.Content>
-          <View style={styles.orderHeader}>
-            <View>
-              <Text style={styles.orderNumber}>Order #{item.id.substring(0, 6)}</Text>
-              <Text style={styles.orderDate}>{formatDate(item.createdAt)}</Text>
-            </View>
-            <Chip 
-              mode="flat"
-              style={[
-                styles.statusChip, 
-                getStatusChipStyle(item.status)
-              ]}
-            >
-              {getStatusLabel(item.status)}
-            </Chip>
-          </View>
-          
-          <View style={styles.shopInfo}>
-            <MaterialIcons name="store" size={16} color="#666" />
-            <Text style={styles.shopName}>{item.shopName || 'Unknown Shop'}</Text>
-          </View>
-          
-          <View style={styles.orderDetails}>
-            <Text style={styles.itemsCount}>
-              {item.items && item.items.reduce((acc, curr) => acc + (curr.quantity || 1), 0)} item(s)
-            </Text>
-            <Text style={styles.totalAmount}>₹{(item.totalAmount || 0).toFixed(2)}</Text>
-          </View>
-          
-          {item.status === 'pending' && (
-            <TouchableOpacity 
-              style={styles.cancelButton}
-              onPress={() => handleCancelOrder(item.id)}
-            >
-              <Text style={styles.cancelButtonText}>Cancel Order</Text>
-            </TouchableOpacity>
-          )}
-        </Card.Content>
-      </Card>
-    </TouchableOpacity>
-  );
-
-  const renderEmptyList = () => (
-    <View style={styles.emptyContainer}>
-      <MaterialIcons name="receipt-long" size={80} color="#ddd" />
-      <Text style={styles.emptyText}>No orders yet</Text>
-      <Text style={styles.emptySubText}>Your order history will appear here</Text>
+  const renderHeader = () => (
+    <View style={styles.headerContainer}>
+      <Text style={styles.headerTitle}>My Orders</Text>
+      <Searchbar
+        placeholder="Search by shop name or order ID"
+        onChangeText={setSearchQuery}
+        value={searchQuery}
+        style={styles.searchBar}
+        inputStyle={styles.searchInput}
+        iconColor="#666"
+      />
+      
+      <View style={styles.filtersContainer}>
+        <ScrollView 
+          horizontal 
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.filtersScrollContent}
+        >
+          <Chip
+            selected={selectedStatus === 'all'}
+            onPress={() => setSelectedStatus('all')}
+            style={[styles.filterChip, selectedStatus === 'all' && styles.selectedFilterChip]}
+            textStyle={[styles.filterChipText, selectedStatus === 'all' && styles.selectedFilterChipText]}
+          >
+            All
+          </Chip>
+          <Chip
+            selected={selectedStatus === 'pending'}
+            onPress={() => setSelectedStatus('pending')}
+            style={[styles.filterChip, selectedStatus === 'pending' && styles.selectedFilterChip]}
+            textStyle={[styles.filterChipText, selectedStatus === 'pending' && styles.selectedFilterChipText]}
+          >
+            Pending
+          </Chip>
+          <Chip
+            selected={selectedStatus === 'accepted'}
+            onPress={() => setSelectedStatus('accepted')}
+            style={[styles.filterChip, selectedStatus === 'accepted' && styles.selectedFilterChip]}
+            textStyle={[styles.filterChipText, selectedStatus === 'accepted' && styles.selectedFilterChipText]}
+          >
+            Accepted
+          </Chip>
+          <Chip
+            selected={selectedStatus === 'preparing'}
+            onPress={() => setSelectedStatus('preparing')}
+            style={[styles.filterChip, selectedStatus === 'preparing' && styles.selectedFilterChip]}
+            textStyle={[styles.filterChipText, selectedStatus === 'preparing' && styles.selectedFilterChipText]}
+          >
+            Preparing
+          </Chip>
+          <Chip
+            selected={selectedStatus === 'ready'}
+            onPress={() => setSelectedStatus('ready')}
+            style={[styles.filterChip, selectedStatus === 'ready' && styles.selectedFilterChip]}
+            textStyle={[styles.filterChipText, selectedStatus === 'ready' && styles.selectedFilterChipText]}
+          >
+            Ready
+          </Chip>
+          <Chip
+            selected={selectedStatus === 'completed'}
+            onPress={() => setSelectedStatus('completed')}
+            style={[styles.filterChip, selectedStatus === 'completed' && styles.selectedFilterChip]}
+            textStyle={[styles.filterChipText, selectedStatus === 'completed' && styles.selectedFilterChipText]}
+          >
+            Completed
+          </Chip>
+          <Chip
+            selected={selectedStatus === 'cancelled'}
+            onPress={() => setSelectedStatus('cancelled')}
+            style={[styles.filterChip, selectedStatus === 'cancelled' && styles.selectedFilterChip]}
+            textStyle={[styles.filterChipText, selectedStatus === 'cancelled' && styles.selectedFilterChipText]}
+          >
+            Cancelled
+          </Chip>
+        </ScrollView>
+      </View>
     </View>
   );
+
+  if (loading && !refreshing) {
+    return (
+      <SafeAreaView style={styles.loadingContainer}>
+        <Image
+          source={require('../../assets/images/food-loading.png')}
+          style={styles.loadingImage}
+          resizeMode="contain"
+        />
+        <Text style={styles.loadingText}>Loading your orders...</Text>
+      </SafeAreaView>
+    );
+  }
 
   return (
-    <View style={styles.container}>
-      <View style={styles.filterContainer}>
-        <TouchableOpacity
-          style={[
-            styles.filterChip,
-            selectedFilter === 'all' && styles.activeFilter
-          ]}
-          onPress={() => filterOrders('all')}
-        >
-          <Text style={[
-            styles.filterText,
-            selectedFilter === 'all' && styles.activeFilterText
-          ]}>All</Text>
-        </TouchableOpacity>
-        
-        <TouchableOpacity
-          style={[
-            styles.filterChip,
-            selectedFilter === 'active' && styles.activeFilter
-          ]}
-          onPress={() => filterOrders('active')}
-        >
-          <Text style={[
-            styles.filterText,
-            selectedFilter === 'active' && styles.activeFilterText
-          ]}>Active</Text>
-        </TouchableOpacity>
-        
-        <TouchableOpacity
-          style={[
-            styles.filterChip,
-            selectedFilter === 'completed' && styles.activeFilter
-          ]}
-          onPress={() => filterOrders('completed')}
-        >
-          <Text style={[
-            styles.filterText,
-            selectedFilter === 'completed' && styles.activeFilterText
-          ]}>Completed</Text>
-        </TouchableOpacity>
-      </View>
-
-      {loading ? (
-        <ActivityIndicator size="large" color="#ff8c00" style={styles.loader} />
-      ) : getFilteredOrders().length > 0 ? (
-        <FlatList
-          data={getFilteredOrders()}
-          renderItem={renderOrderItem}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.ordersList}
-          showsVerticalScrollIndicator={false}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-            />
-          }
-        />
-      ) : (
-        renderEmptyList()
-      )}
-    </View>
+    <SafeAreaView style={styles.container}>
+      <StatusBar style="dark" />
+      
+      {renderHeader()}
+      
+      <FlatList
+        data={getFilteredOrders()}
+        renderItem={renderOrderItem}
+        keyExtractor={(item) => item.id}
+        contentContainerStyle={styles.listContent}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={['#ff8c00']}
+            tintColor="#ff8c00"
+          />
+        }
+        ListEmptyComponent={renderEmptyList}
+      />
+    </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#f8f8f8',
   },
-  filterContainer: {
-    flexDirection: 'row',
-    padding: 16,
+  headerContainer: {
     backgroundColor: '#fff',
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 8,
     borderBottomWidth: 1,
-    borderBottomColor: '#eee',
+    borderBottomColor: '#f0f0f0',
+  },
+  headerTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#333',
+    marginBottom: 16,
+  },
+  searchBar: {
+    elevation: 0,
+    backgroundColor: '#f5f5f5',
+    borderRadius: 8,
+    marginBottom: 16,
+    height: 46,
+  },
+  searchInput: {
+    fontSize: 14,
+  },
+  filtersContainer: {
+    marginBottom: 8,
+  },
+  filtersScrollContent: {
+    paddingRight: 16,
   },
   filterChip: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
+    marginRight: 8,
     backgroundColor: '#f0f0f0',
-    marginRight: 10,
+    borderRadius: 16,
   },
-  activeFilter: {
+  selectedFilterChip: {
     backgroundColor: '#ff8c00',
   },
-  filterText: {
+  filterChipText: {
     color: '#666',
+    fontSize: 12,
   },
-  activeFilterText: {
+  selectedFilterChipText: {
     color: '#fff',
-    fontWeight: 'bold',
   },
-  ordersList: {
+  listContent: {
     padding: 16,
+    paddingBottom: 32,
+  },
+  orderItemContainer: {
+    marginBottom: 16,
   },
   orderCard: {
-    marginBottom: 16,
-    borderRadius: 8,
+    borderRadius: 12,
     elevation: 2,
   },
   orderHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     marginBottom: 12,
-  },
-  orderNumber: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    marginBottom: 4,
-  },
-  orderDate: {
-    fontSize: 14,
-    color: '#666',
-  },
-  statusChip: {
-    height: 28,
-  },
-  pendingChip: {
-    backgroundColor: '#ffefd5',
-  },
-  confirmedChip: {
-    backgroundColor: '#e6f7ff',
-  },
-  preparingChip: {
-    backgroundColor: '#fff0f5',
-  },
-  readyChip: {
-    backgroundColor: '#e6f7e9',
-  },
-  completedChip: {
-    backgroundColor: '#f0f0f0',
-  },
-  cancelledChip: {
-    backgroundColor: '#ffebee',
   },
   shopInfo: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 12,
+    flex: 1,
+  },
+  shopDetails: {
+    marginLeft: 12,
+    flex: 1,
   },
   shopName: {
-    fontSize: 14,
-    color: '#666',
-    marginLeft: 8,
-  },
-  orderDetails: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  itemsCount: {
-    fontSize: 14,
-    color: '#666',
-  },
-  totalAmount: {
     fontSize: 16,
     fontWeight: 'bold',
-    color: '#ff8c00',
+    color: '#333',
   },
-  loader: {
-    flex: 1,
-    justifyContent: 'center',
+  orderId: {
+    fontSize: 12,
+    color: '#757575',
+    marginTop: 2,
+  },
+  statusContainer: {
+    flexDirection: 'row',
     alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 16,
+    borderWidth: 1,
   },
-  emptyContainer: {
-    flex: 1,
-    justifyContent: 'center',
+  statusText: {
+    fontSize: 12,
+    fontWeight: '500',
+    marginLeft: 4,
+  },
+  divider: {
+    backgroundColor: '#f0f0f0',
+    height: 1,
+    marginBottom: 12,
+  },
+  orderDetails: {
+    marginBottom: 16,
+  },
+  detailRow: {
+    flexDirection: 'row',
     alignItems: 'center',
-    padding: 20,
+    marginBottom: 8,
   },
-  emptyText: {
-    fontSize: 18,
-    color: '#888',
-    marginTop: 10,
-  },
-  emptySubText: {
+  detailText: {
     fontSize: 14,
-    color: '#888',
-    marginTop: 10,
+    color: '#757575',
+    marginLeft: 8,
+  },
+  orderActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  viewButton: {
+    flex: 1,
+    marginRight: 8,
+    borderColor: '#ff8c00',
+    borderRadius: 8,
+  },
+  viewButtonLabel: {
+    color: '#ff8c00',
+    fontSize: 12,
   },
   cancelButton: {
-    backgroundColor: '#ff8c00',
-    padding: 12,
+    flex: 1,
+    marginLeft: 8,
+    borderColor: '#F44336',
     borderRadius: 8,
-    alignItems: 'center',
-    marginTop: 12,
   },
-  cancelButtonText: {
-    color: '#fff',
+  cancelButtonLabel: {
+    color: '#F44336',
+    fontSize: 12,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+  },
+  loadingImage: {
+    width: 150,
+    height: 150,
+    marginBottom: 20,
+  },
+  loadingText: {
+    fontSize: 16,
+    color: '#666',
+    marginTop: 16,
+  },
+  emptyContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 32,
+  },
+  emptyImage: {
+    width: 150,
+    height: 150,
+    marginBottom: 20,
+  },
+  emptyTitle: {
+    fontSize: 18,
     fontWeight: 'bold',
+    color: '#333',
+    marginTop: 16,
+  },
+  emptyText: {
+    fontSize: 14,
+    color: '#757575',
+    textAlign: 'center',
+    marginTop: 8,
   },
 });
 

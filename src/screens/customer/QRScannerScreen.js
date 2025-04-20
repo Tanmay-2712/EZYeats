@@ -1,14 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, View, Text, TouchableOpacity, ActivityIndicator, Alert, Animated, Dimensions, StatusBar } from 'react-native';
+import { StyleSheet, View, Text, TouchableOpacity, ActivityIndicator, Alert, Animated, Dimensions, StatusBar, SafeAreaView } from 'react-native';
 import { BarCodeScanner } from 'expo-barcode-scanner';
 import { MaterialIcons } from '@expo/vector-icons';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../../firebase/config';
 
 const { width } = Dimensions.get('window');
-const SCAN_AREA_SIZE = width * 0.7; // 70% of screen width
-const CORNER_WIDTH = 20;
-const CORNER_THICKNESS = 3;
+const SCAN_AREA_SIZE = width * 0.7;
 
 const QRScannerScreen = ({ navigation }) => {
   const [hasPermission, setHasPermission] = useState(null);
@@ -23,31 +21,22 @@ const QRScannerScreen = ({ navigation }) => {
     })();
   }, []);
 
-  // Animate the scan line
   useEffect(() => {
     if (!scanned && !loading) {
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(scanLineAnimation, {
-            toValue: SCAN_AREA_SIZE,
-            duration: 2000,
-            useNativeDriver: true,
-          }),
-          Animated.timing(scanLineAnimation, {
-            toValue: 0,
-            duration: 2000,
-            useNativeDriver: true,
-          }),
-        ])
-      ).start();
-    } else {
-      scanLineAnimation.setValue(0);
+      animateScanLine();
     }
-    
-    return () => {
-      scanLineAnimation.setValue(0);
-    };
   }, [scanned, loading]);
+
+  const animateScanLine = () => {
+    scanLineAnimation.setValue(0);
+    Animated.loop(
+      Animated.timing(scanLineAnimation, {
+        toValue: SCAN_AREA_SIZE,
+        duration: 2000,
+        useNativeDriver: true,
+      })
+    ).start();
+  };
 
   const handleBarCodeScanned = async ({ type, data }) => {
     try {
@@ -98,33 +87,37 @@ const QRScannerScreen = ({ navigation }) => {
 
   if (hasPermission === null) {
     return (
-      <View style={styles.permissionContainer}>
+      <SafeAreaView style={styles.container}>
         <StatusBar barStyle="light-content" backgroundColor="#000" />
-        <ActivityIndicator size="large" color="#ff8c00" />
-        <Text style={styles.permissionText}>Requesting camera permission...</Text>
-      </View>
+        <View style={styles.permissionContainer}>
+          <ActivityIndicator size="large" color="#ff8c00" />
+          <Text style={styles.permissionText}>Requesting camera permission...</Text>
+        </View>
+      </SafeAreaView>
     );
   }
   
   if (hasPermission === false) {
     return (
-      <View style={styles.permissionContainer}>
+      <SafeAreaView style={styles.container}>
         <StatusBar barStyle="light-content" backgroundColor="#000" />
-        <MaterialIcons name="no-photography" size={80} color="#ff8c00" />
-        <Text style={styles.permissionText}>No access to camera</Text>
-        <Text style={styles.permissionSubText}>Camera permission is required to scan QR codes.</Text>
-        <TouchableOpacity 
-          style={styles.button}
-          onPress={() => navigation.goBack()}
-        >
-          <Text style={styles.buttonText}>Go Back</Text>
-        </TouchableOpacity>
-      </View>
+        <View style={styles.permissionContainer}>
+          <MaterialIcons name="no-photography" size={80} color="#ff8c00" />
+          <Text style={styles.permissionTitle}>Camera Access Needed</Text>
+          <Text style={styles.permissionText}>Camera permission is required to scan QR codes.</Text>
+          <TouchableOpacity 
+            style={styles.button}
+            onPress={() => navigation.goBack()}
+          >
+            <Text style={styles.buttonText}>Go Back</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
     );
   }
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#000" />
       <BarCodeScanner
         onBarCodeScanned={scanned ? undefined : handleBarCodeScanned}
@@ -132,23 +125,22 @@ const QRScannerScreen = ({ navigation }) => {
       />
       
       <View style={styles.overlay}>
-        <View style={styles.scanOuterContainer}>
-          <View style={styles.scanContainer}>
-            {/* Scanner corners */}
-            <View style={[styles.corner, styles.topLeftCorner]} />
-            <View style={[styles.corner, styles.topRightCorner]} />
-            <View style={[styles.corner, styles.bottomLeftCorner]} />
-            <View style={[styles.corner, styles.bottomRightCorner]} />
-            
-            {/* Scan line animation */}
+        <View style={styles.scanWindowContainer}>
+          <View style={styles.scanWindow}>
             {!scanned && !loading && (
               <Animated.View 
                 style={[
                   styles.scanLine, 
-                  { transform: [{ translateY: scanLineAnimation }] }
+                  { 
+                    transform: [{ translateY: scanLineAnimation }] 
+                  }
                 ]} 
               />
             )}
+            <View style={[styles.corner, styles.topLeftCorner]} />
+            <View style={[styles.corner, styles.topRightCorner]} />
+            <View style={[styles.corner, styles.bottomLeftCorner]} />
+            <View style={[styles.corner, styles.bottomRightCorner]} />
           </View>
         </View>
       </View>
@@ -160,17 +152,12 @@ const QRScannerScreen = ({ navigation }) => {
         </Text>
       </View>
       
-      <TouchableOpacity 
-        style={styles.closeButton}
-        onPress={() => navigation.goBack()}
-      >
-        <MaterialIcons name="close" size={28} color="#fff" />
-      </TouchableOpacity>
-      
       {loading && (
         <View style={styles.loadingOverlay}>
-          <ActivityIndicator size="large" color="#ff8c00" />
-          <Text style={styles.loadingText}>Loading shop menu...</Text>
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color="#ff8c00" />
+            <Text style={styles.loadingText}>Loading shop menu...</Text>
+          </View>
         </View>
       )}
       
@@ -180,19 +167,49 @@ const QRScannerScreen = ({ navigation }) => {
             style={styles.button}
             onPress={handleScanAgain}
           >
+            <MaterialIcons name="qr-code-scanner" size={20} color="#fff" style={styles.buttonIcon} />
             <Text style={styles.buttonText}>Scan Again</Text>
           </TouchableOpacity>
         </View>
       )}
-    </View>
+      
+      <TouchableOpacity 
+        style={styles.backButton}
+        onPress={() => navigation.goBack()}
+      >
+        <MaterialIcons name="arrow-back" size={24} color="#fff" />
+      </TouchableOpacity>
+    </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    flexDirection: 'column',
     backgroundColor: '#000',
+  },
+  permissionContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f8f8f8',
+    padding: 20,
+  },
+  permissionTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#333',
+    marginTop: 20,
+    marginBottom: 10,
+    textAlign: 'center',
+  },
+  permissionText: {
+    fontSize: 16,
+    color: '#666',
+    marginTop: 12,
+    textAlign: 'center',
+    paddingHorizontal: 30,
+    lineHeight: 22,
   },
   scanner: {
     ...StyleSheet.absoluteFillObject,
@@ -203,51 +220,53 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  scanOuterContainer: {
+  scanWindowContainer: {
     width: SCAN_AREA_SIZE,
     height: SCAN_AREA_SIZE,
-    alignItems: 'center',
     justifyContent: 'center',
+    alignItems: 'center',
   },
-  scanContainer: {
+  scanWindow: {
     width: '100%',
     height: '100%',
     backgroundColor: 'transparent',
-  },
-  corner: {
-    position: 'absolute',
-    width: CORNER_WIDTH,
-    height: CORNER_WIDTH,
-    borderColor: '#ff8c00',
-  },
-  topLeftCorner: {
-    top: 0,
-    left: 0,
-    borderLeftWidth: CORNER_THICKNESS,
-    borderTopWidth: CORNER_THICKNESS,
-  },
-  topRightCorner: {
-    top: 0,
-    right: 0,
-    borderRightWidth: CORNER_THICKNESS,
-    borderTopWidth: CORNER_THICKNESS,
-  },
-  bottomLeftCorner: {
-    bottom: 0,
-    left: 0,
-    borderLeftWidth: CORNER_THICKNESS,
-    borderBottomWidth: CORNER_THICKNESS,
-  },
-  bottomRightCorner: {
-    bottom: 0,
-    right: 0,
-    borderRightWidth: CORNER_THICKNESS,
-    borderBottomWidth: CORNER_THICKNESS,
+    overflow: 'hidden',
   },
   scanLine: {
     height: 2,
     width: '100%',
     backgroundColor: '#ff8c00',
+  },
+  corner: {
+    position: 'absolute',
+    width: 20,
+    height: 20,
+    borderColor: '#ff8c00',
+    backgroundColor: 'transparent',
+  },
+  topLeftCorner: {
+    top: 0,
+    left: 0,
+    borderTopWidth: 3,
+    borderLeftWidth: 3,
+  },
+  topRightCorner: {
+    top: 0,
+    right: 0,
+    borderTopWidth: 3,
+    borderRightWidth: 3,
+  },
+  bottomLeftCorner: {
+    bottom: 0,
+    left: 0,
+    borderBottomWidth: 3,
+    borderLeftWidth: 3,
+  },
+  bottomRightCorner: {
+    bottom: 0,
+    right: 0,
+    borderBottomWidth: 3,
+    borderRightWidth: 3,
   },
   headerContainer: {
     position: 'absolute',
@@ -255,36 +274,21 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     alignItems: 'center',
+    paddingHorizontal: 20,
   },
   headerText: {
     fontSize: 24,
     fontWeight: 'bold',
     color: '#fff',
     marginBottom: 12,
-    textShadowColor: 'rgba(0, 0, 0, 0.75)',
-    textShadowOffset: { width: 1, height: 1 },
-    textShadowRadius: 2,
+    textAlign: 'center',
   },
   subHeaderText: {
     fontSize: 16,
     color: '#f0f0f0',
     textAlign: 'center',
     paddingHorizontal: 20,
-    textShadowColor: 'rgba(0, 0, 0, 0.75)',
-    textShadowOffset: { width: 1, height: 1 },
-    textShadowRadius: 2,
-  },
-  closeButton: {
-    position: 'absolute',
-    top: 15,
-    left: 15,
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 10,
+    lineHeight: 22,
   },
   buttonContainer: {
     position: 'absolute',
@@ -296,48 +300,51 @@ const styles = StyleSheet.create({
     backgroundColor: '#ff8c00',
     paddingVertical: 14,
     paddingHorizontal: 40,
-    borderRadius: 8,
+    borderRadius: 10,
+    marginTop: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
     elevation: 3,
+  },
+  buttonIcon: {
+    marginRight: 8,
   },
   buttonText: {
     color: '#fff',
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: 'bold',
-    letterSpacing: 0.5,
   },
   loadingOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.8)',
+    backgroundColor: 'rgba(0,0,0,0.7)',
     justifyContent: 'center',
     alignItems: 'center',
   },
+  loadingContainer: {
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    borderRadius: 12,
+    padding: 20,
+    alignItems: 'center',
+    minWidth: 200,
+  },
   loadingText: {
-    color: '#fff',
-    fontSize: 18,
+    color: '#333',
+    fontSize: 16,
     marginTop: 16,
     fontWeight: '500',
   },
-  permissionContainer: {
-    flex: 1,
+  backButton: {
+    position: 'absolute',
+    top: 20,
+    left: 20,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#1c1c1c',
-    padding: 20,
-  },
-  permissionText: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginTop: 20,
-    textAlign: 'center',
-  },
-  permissionSubText: {
-    fontSize: 16,
-    color: '#aaa',
-    marginTop: 10,
-    marginBottom: 30,
-    textAlign: 'center',
-    paddingHorizontal: 40,
+    zIndex: 10,
   },
 });
 

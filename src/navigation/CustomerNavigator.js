@@ -2,6 +2,7 @@ import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
 import { MaterialIcons } from '@expo/vector-icons';
+import { getFocusedRouteNameFromRoute } from '@react-navigation/native';
 
 import ShopsScreen from '../screens/customer/ShopsScreen';
 import ShopDetailScreen from '../screens/customer/ShopDetailScreen';
@@ -19,6 +20,7 @@ const Stack = createStackNavigator();
 const ShopsStack = () => {
   return (
     <Stack.Navigator
+      initialRouteName="Shops"
       screenOptions={{
         headerStyle: {
           backgroundColor: '#ff8c00',
@@ -65,6 +67,7 @@ const ShopsStack = () => {
 const CartStack = () => {
   return (
     <Stack.Navigator
+      initialRouteName="CartScreen"
       screenOptions={{
         headerStyle: {
           backgroundColor: '#ff8c00',
@@ -84,6 +87,7 @@ const CartStack = () => {
 const OrdersStack = () => {
   return (
     <Stack.Navigator
+      initialRouteName="OrdersList"
       screenOptions={{
         headerStyle: {
           backgroundColor: '#ff8c00',
@@ -104,6 +108,7 @@ const OrdersStack = () => {
 const ProfileStack = () => {
   return (
     <Stack.Navigator
+      initialRouteName="ProfileScreen"
       screenOptions={{
         headerStyle: {
           backgroundColor: '#ff8c00',
@@ -129,6 +134,7 @@ const CustomerNavigator = () => {
           height: 60,
           paddingBottom: 10,
         },
+        unmountOnBlur: true,
       }}
     >
       <Tab.Screen 
@@ -141,6 +147,15 @@ const CustomerNavigator = () => {
             <MaterialIcons name="store" color={color} size={size} />
           ),
         }}
+        listeners={({ navigation, route }) => ({
+          tabPress: e => {
+            const currentRouteName = getFocusedRouteNameFromRoute(route);
+            if (currentRouteName && currentRouteName !== 'Shops') {
+              e.preventDefault();
+              navigation.navigate('ShopsTab', { screen: 'Shops' });
+            }
+          },
+        })}
       />
       <Tab.Screen 
         name="CartTab" 
@@ -152,6 +167,15 @@ const CustomerNavigator = () => {
             <MaterialIcons name="shopping-cart" color={color} size={size} />
           ),
         }}
+        listeners={({ navigation, route }) => ({
+          tabPress: e => {
+            const currentRouteName = getFocusedRouteNameFromRoute(route);
+            if (currentRouteName && currentRouteName !== 'CartScreen') {
+              e.preventDefault();
+              navigation.navigate('CartTab', { screen: 'CartScreen' });
+            }
+          },
+        })}
       />
       <Tab.Screen 
         name="OrdersTab" 
@@ -163,6 +187,15 @@ const CustomerNavigator = () => {
             <MaterialIcons name="receipt" color={color} size={size} />
           ),
         }}
+        listeners={({ navigation, route }) => ({
+          tabPress: e => {
+            const currentRouteName = getFocusedRouteNameFromRoute(route);
+            if (currentRouteName && currentRouteName !== 'OrdersList') {
+              e.preventDefault();
+              navigation.navigate('OrdersTab', { screen: 'OrdersList' });
+            }
+          },
+        })}
       />
       <Tab.Screen 
         name="ProfileTab" 
@@ -174,6 +207,15 @@ const CustomerNavigator = () => {
             <MaterialIcons name="person" color={color} size={size} />
           ),
         }}
+        listeners={({ navigation, route }) => ({
+          tabPress: e => {
+            const currentRouteName = getFocusedRouteNameFromRoute(route);
+            if (currentRouteName && currentRouteName !== 'ProfileScreen') {
+              e.preventDefault();
+              navigation.navigate('ProfileTab', { screen: 'ProfileScreen' });
+            }
+          },
+        })}
       />
     </Tab.Navigator>
   );
